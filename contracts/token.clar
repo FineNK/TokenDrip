@@ -162,3 +162,85 @@
     )
 )
 
+(define-public (remove-from-approved-list (recipient principal))
+    (begin
+        (asserts! (is-eq tx-sender (var-get admin-principal)) ERR-UNAUTHORIZED)
+        (asserts! (validate-recipient recipient) ERR-INVALID-RECIPIENT)
+        (asserts! (is-approved recipient) ERR-NOT-QUALIFIED)
+        (map-delete approved-recipients recipient)
+        (ok true)
+    )
+)
+
+(define-public (set-qualified-amount (recipient principal) (quantity uint))
+    (begin
+        (asserts! (is-eq tx-sender (var-get admin-principal)) ERR-UNAUTHORIZED)
+        (asserts! (validate-recipient recipient) ERR-INVALID-RECIPIENT)
+        (asserts! (validate-quantity quantity) ERR-INVALID-QUANTITY)
+        (map-set qualified-recipients recipient quantity)
+        (ok true)
+    )
+)
+
+(define-public (receive-distribution (ft <fungible-token-trait>))
+    (let (
+        (recipient tx-sender)
+        (qualified-amount (default-to u0 (map-get? qualified-recipients recipient)))
+        (received-amount (get-distribution-status recipient))
+        (token (unwrap! (var-get token-principal) ERR-TOKEN-UNDEFINED))
+    )
+        (asserts! (validate-recipient recipient) ERR-INVALID-RECIPIENT)
+        (asserts! (validate-token-contract ft) ERR-UNRECOGNIZED-TOKEN)
+        (asserts! (is-eq token (contract-of ft)) ERR-UNRECOGNIZED-TOKEN)
+        (asserts! (check-qualification recipient) ERR-NOT-QUALIFIED)
+        (asserts! (>= (- qualified-amount received-amount) (var-get tokens-per-distribution)) ERR-INSUFFICIENT-FUNDS)
+        
+        ;; Update received amount
+        (map-set distributed-amounts recipient (+ received-amount (var-get tokens-per-distribution)))
+        
+        ;; Transfer tokens using fungible-token-trait
+        (as-contract
+            (contract-call? ft transfer
+                (var-get tokens-per-distribution)
+                tx-sender
+                recipient
+                none
+            )
+        )
+    )
+)
+
+(define-public (end-distribution)
+    (begin
+        (asserts! (is-eq tx-sender (var-get admin-principal)) ERR-UNAUTHORIZED)
+        (var-set distribution-active false)
+        (ok true)
+    )
+)
+
+;; Emergency functions
+(define-public (update-distribution-timeframe (new-end uint))
+    (begin
+        (asserts! (is-eq tx-sender (var-get admin-principal)) ERR-UNAUTHORIZED)
+        (asserts! (validate-timeframe (- new-end block-height)) ERR-INVALID-TIMEFRAME)
+        (var-set distribution-end-time new-end)
+        (ok true)
+    )
+)
+
+(define-public (emergency-token-recovery (ft <fungible-token-trait>) (quantity uint))
+    (let ((token (unwrap! (var-get token-principal) ERR-TOKEN-UNDEFINED)))
+        (asserts! (is-eq tx-sender (var-get admin-principal)) ERR-UNAUTHORIZED)
+        (asserts! (validate-quantity quantity) ERR-INVALID-QUANTITY)
+        (asserts! (validate-token-contract ft) ERR-UNRECOGNIZED-TOKEN)
+        (asserts! (is-eq (contract-of ft) token) ERR-UNRECOGNIZED-TOKEN)
+        (as-contract
+            (contract-call? ft transfer
+                quantity
+                tx-sender
+                (var-get admin-principal)
+                none
+            )
+        )
+    )
+)
